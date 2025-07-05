@@ -2,16 +2,15 @@ import numpy as np
 from numba import njit
 import time
 
-# === Classes from your code ===
-@njit
-def position_exists(userPositions, pos):
-    for i in range(userPositions.shape[0]):
-        if userPositions[i, 0] == pos[0] and userPositions[i, 1] == pos[1]:
-            return True
-    return False
+# --- CONFIG ---
+MAX_USERS = 10000
+BOARD_W, BOARD_H = 1920, 1080
+CHUNK_SIZE = 100
+
+# --- DATA STRUCTURES ---
 
 class User:
-    def __init__(self, UUID, username, status, lastLogin, clientW, clientH, anchor=None, currentPos=None, currentChunk=None):
+    def __init__(self, UUID, username, status, lastLogin, clientW, clientH, isMoving=False, anchor=None):
         self.UUID = UUID
         self.username = username
         self.status = status
@@ -19,15 +18,15 @@ class User:
         self.clientW = clientW
         self.clientH = clientH
         self.anchor = anchor
-        self.currentPos = currentPos
-        self.currentChunk = currentChunk
+        self.currentPos = None
         self.chunkID = None
+        self.isMoving = isMoving
 
     def __repr__(self):
         return f"<User {self.username} at {self.currentPos}, status={self.status}>"
 
 class Post:
-    def __init__(self, postID, postType, postMedia, postTime, postedBy, postedOn, postSize, state):
+    def __init__(self, postID, postType, postMedia, postTime, postedBy:User, postedOn, postSize, state):
         self.postID = postID
         self.postType = postType
         self.postMedia = postMedia
@@ -40,175 +39,177 @@ class Post:
     def __repr__(self):
         return f"<Post {self.postID} type={self.postType} at {self.postedOn}>"
 
+
 class Board:
-    def __init__(self, users:list, boardDim: tuple, state: str):
-        self.users = users
+    def __init__(self, boardDim):
         self.boardDim = boardDim
-        self.state = state
-        self.posts = []
-        self.post_bitmap = {}
+        self.users = {}  # UUID -> User
+        self.user_positions = np.full((MAX_USERS, 2), -1, dtype=np.int32)  # Preallocated
+        self.uuid_to_idx = {}  # UUID -> row idx in user_positions
+        self.occupied = set()  # (x, y) tuples
+        self.posts = {}  # postID -> Post
+        self.chunk_map = {}  # (chunk_x, chunk_y) -> set of postIDs
+        self.chunkUsermap = {}
+        self.next_user_idx = 0
 
-        if users:
-            self.userPositions = np.stack([u.currentPos for u in users if u.currentPos is not None])
-            self.numUsersOnline = sum(u.status != "dead" for u in users)
+    def add_user(self, user: User, maxTries=10):
+        # Assign index
+        if user.UUID in self.uuid_to_idx:
+            idx = self.uuid_to_idx[user.UUID]
         else:
-            self.userPositions = np.empty((0, 2), dtype=int)
-            self.numUsersOnline = 0
+            idx = self.next_user_idx
+            self.uuid_to_idx[user.UUID] = idx
+            self.next_user_idx += 1
 
-    def add_user(self, user: User, maxTries: int, isolationRadius: int, chunkSize=None):
+        # Find spawn position
         if user.anchor:
-            user.currentPos = user.anchor
+            pos = user.anchor
+            if tuple(pos) in self.occupied:
+                print(f"Anchor occupied for {user.username}")
+                return False
         else:
             for _ in range(maxTries):
-                tempPos = np.random.randint(
-                    low=[0, 0],
-                    high=[self.boardDim[0], self.boardDim[1]]
-                )
-                if not position_exists(self.userPositions,tuple(tempPos)):
-                    user.currentPos = tuple(tempPos)
+                pos = np.random.randint([0, 0], [self.boardDim[0], self.boardDim[1]])
+                if tuple(pos) not in self.occupied:
                     break
             else:
-                print(f"Failed to find free tile for user {user.username}. Leaving position None.")
+                print(f"No free tile for {user.username}")
+                return False
 
-        # Compute initial chunkID if chunking is used
-        if chunkSize and user.currentPos is not None:
-            chunkX = user.currentPos[0] // chunkSize[0]
-            chunkY = user.currentPos[1] // chunkSize[1]
-            user.chunkID = (chunkX, chunkY)
-        else:
-            user.chunkID = None
+        user.currentPos = tuple(pos)
+        user.chunkID = (user.currentPos[0] // CHUNK_SIZE, user.currentPos[1] // CHUNK_SIZE)
+        self.users[user.UUID] = user
+        self.user_positions[idx] = user.currentPos
+        self.occupied.add(user.currentPos)
+        self._subscribeUsertoChunk(user)
+        self._updateChunk(user.chunkID)
+        return True
 
-        self.users.append(user)
-        self.userPositions = np.stack([
-            u.currentPos for u in self.users if u.currentPos is not None
-        ])
-        self.numUsersOnline = sum(u.status != "dead" for u in self.users)
+    def move_user(self, uuid, dx, dy):
+        if uuid not in self.users:
+            print(f"No user {uuid}")
+            return False
+        user = self.users[uuid]
+        idx = self.uuid_to_idx[uuid]
+        old_pos = user.currentPos
+        new_x = np.clip(old_pos[0] + dx, 0, self.boardDim[0] - 1)
+        new_y = np.clip(old_pos[1] + dy, 0, self.boardDim[1] - 1)
+        new_pos = (new_x, new_y)
+        if new_pos in self.occupied:
+            print(f"Target tile occupied for {user.username}")
+            return False
+        # Update positions
+        self.occupied.remove(old_pos)
+        self.occupied.add(new_pos)
+        user.currentPos = new_pos
+        self.user_positions[idx] = new_pos
+        oldChunk = user.chunkID
+        user.chunkID = (new_x // CHUNK_SIZE, new_y // CHUNK_SIZE)
+        if oldChunk != user.chunkID:
+            if oldChunk in self.chunkUsermap:
+                self.chunkUsermap[oldChunk].discard(user.UUID)
+                if not self.chunkUsermap[oldChunk]:
+                    del self.chunkUsermap[oldChunk]
 
-    @njit
-    def _position_exists(userPositions, pos):
-        for i in range(userPositions.shape[0]):
-            if userPositions[i, 0] == pos[0] and userPositions[i, 1] == pos[1]:
-                return True
-        return False
+            self._subscribeUsertoChunk(user)
+
+            # Update both chunks
+            self._updateChunk(oldChunk)
+            self._updateChunk(user.chunkID)
 
 
-    def move_user(self, uuid, dragX, dragY, chunkSize=None):
-        user = next((u for u in self.users if u.UUID == uuid), None)
-        if user is None:
-            print(f"No user with UUID {uuid} found!")
-            return None
-
-        if user.currentPos is None:
-            print(f"User {user.username} has no current position.")
-            return None
-
-        newX = int(user.currentPos[0] + dragX)
-        newY = int(user.currentPos[1] + dragY)
-
-        newX = np.clip(newX, 0, self.boardDim[0] - 1)
-        newY = np.clip(newY, 0, self.boardDim[1] - 1)
-
-        oldChunkID = getattr(user, "chunkID", None)
-        newChunkID = oldChunkID
-
-        if chunkSize:
-            newChunkX = newX // chunkSize[0]
-            newChunkY = newY // chunkSize[1]
-            newChunkID = (newChunkX, newChunkY)
-
-            if newChunkID != oldChunkID:
-                print(f"User {user.username} moved chunk from {oldChunkID} → {newChunkID}")
-                user.chunkID = newChunkID
-
-        user.currentPos = (newX, newY)
-
-        self.userPositions = np.stack([
-            u.currentPos for u in self.users if u.currentPos is not None
-        ])
-
-        if newChunkID != oldChunkID:
-            return newChunkID
-        else:
-            return None
+        return True
 
     def add_post(self, post: Post):
-        self.posts.append(post)
-        x_start, y_start = post.postedOn
+        self.posts[post.postID] = post
+        # Add to chunk map (bounding box only)
+        x, y = post.postedOn
         w, h = post.postSize
+        chunk_x0, chunk_y0 = x // CHUNK_SIZE, y // CHUNK_SIZE
+        chunk_x1, chunk_y1 = (x + w - 1) // CHUNK_SIZE, (y + h - 1) // CHUNK_SIZE
+        for cx in range(chunk_x0, chunk_x1 + 1):
+            for cy in range(chunk_y0, chunk_y1 + 1):
+                key = (cx, cy)
+                if key not in self.chunk_map:
+                    self.chunk_map[key] = set()
+                self.chunk_map[key].add(post.postID)
+        # Mark tiles as occupied (for small posts)
+        if w * h < 1000:
+            for dx in range(w):
+                for dy in range(h):
+                    tile = (x + dx, y + dy)
+                    if 0 <= tile[0] < self.boardDim[0] and 0 <= tile[1] < self.boardDim[1]:
+                        self.occupied.add(tile)
+        self._updateChunk(post.postedBy.chunkID)
 
-        for x in range(x_start, min(x_start + w, self.boardDim[0])):
-            for y in range(y_start, min(y_start + h, self.boardDim[1])):
-                tile = (x, y)
-                if tile not in self.post_bitmap:
-                    self.post_bitmap[tile] = []
-                self.post_bitmap[tile].append(post.postID)
+    def posts_in_viewport(self, x0, y0, w, h):
+        # Efficient chunked query for posts in viewport
+        cx0, cy0 = x0 // CHUNK_SIZE, y0 // CHUNK_SIZE
+        cx1, cy1 = (x0 + w - 1) // CHUNK_SIZE, (y0 + h - 1) // CHUNK_SIZE
+        post_ids = set()
+        for cx in range(cx0, cx1 + 1):
+            for cy in range(cy0, cy1 + 1):
+                key = (cx, cy)
+                if key in self.chunk_map:
+                    post_ids.update(self.chunk_map[key])
+        # Filter posts that actually intersect the viewport
+        result = []
+        for pid in post_ids:
+            p = self.posts[pid]
+            px, py = p.postedOn
+            pw, ph = p.postSize
+            if not (px + pw <= x0 or px >= x0 + w or py + ph <= y0 or py >= y0 + h):
+                result.append(p)
+        return result
+    
+    def _updateChunk(self, chunkId):
+        users_in_chunk = self.chunkUsermap.get(chunkId, set())
+        posts_in_chunk_ids = self.chunk_map.get(chunkId, set())
+        
+        posts_in_chunk = [self.posts[pid] for pid in posts_in_chunk_ids]
+        
+        # Now prepare a payload to send to clients
+        update_payload = {
+            "chunkId": chunkId,
+            "users": list(users_in_chunk),
+            "posts": [p.__dict__ for p in posts_in_chunk]
+        }
+        return update_payload
+
+    def _subscribeUsertoChunk(self, user:User):
+        chunkId = user.chunkID
+        if chunkId not in self.chunkUsermap:
+            self.chunkUsermap[chunkId] = set()
+        self.chunkUsermap[chunkId].add(user.UUID)
+
+    def remove_user(self, uuid):
+        if uuid not in self.users:
+            print(f"No user with UUID {uuid} exists.")
+            return False
+
+        user = self.users[uuid]
+        idx = self.uuid_to_idx[uuid]
+
+        # Clean up
+        del self.users[uuid]
+        del self.uuid_to_idx[uuid]
+        self.user_positions[idx] = [-1, -1]
+        self.occupied.discard(user.currentPos)
+
+        chunkID = user.chunkID
+        if chunkID in self.chunkUsermap:
+            self.chunkUsermap[chunkID].discard(uuid)
+            if not self.chunkUsermap[chunkID]:
+                del self.chunkUsermap[chunkID]
+
+        self._updateChunk(chunkID)
+
+        print(f"User {user.username} removed from board.")
+        return True
+
 
     def __repr__(self):
-        return f"<Board Users={len(self.users)} Online={self.numUsersOnline}, Posts={len(self.posts)}>"
+        return f"<Board Users={len(self.users)}, Posts={len(self.posts)}, Chunks={len(self.chunk_map)}>"
 
-# === BENCHMARK TEST ===
 
-if __name__ == "__main__":
-    print("\n=== Caveman Board Benchmark ===")
 
-    # Create giant board
-    board_size = (1920, 1080)
-    board = Board([], board_size, "running")
-
-    # Add users
-    start = time.time()
-    for i in range(1000):
-        u = User(
-            UUID=f"uuid-{i}",
-            username=f"user{i}",
-            status="alive",
-            lastLogin="2025-07-03",
-            clientW=800,
-            clientH=600
-        )
-        board.add_user(u, maxTries=10, isolationRadius=50)
-    end = time.time()
-    print(f"Added 1000 users in {end-start:.4f} seconds")
-
-    # Move users
-    start = time.time()
-    for u in board.users:
-        board.move_user(u.UUID, dragX=5, dragY=-3, chunkSize=(100,100))
-    end = time.time()
-    print(f"Moved 1000 users in {end-start:.4f} seconds")
-
-    # Add small posts
-    start = time.time()
-    for i in range(500):
-        p = Post(
-            postID=f"post-{i}",
-            postType="text",
-            postMedia=f"post_{i}.txt",
-            postTime="2025-07-03",
-            postedBy=f"uuid-{i%1000}",
-            postedOn=(np.random.randint(0, 1920), np.random.randint(0, 1080)),
-            postSize=(5, 5),
-            state="wet"
-        )
-        board.add_post(p)
-    end = time.time()
-    print(f"Added 500 small posts in {end-start:.4f} seconds")
-
-    # Add a massive post
-    start = time.time()
-    big_post = Post(
-        postID="big-one",
-        postType="image",
-        postMedia="huge_image.png",
-        postTime="2025-07-03",
-        postedBy="uuid-0",
-        postedOn=(0,0),
-        postSize=(1920, 1080),
-        state="wet"
-    )
-    board.add_post(big_post)
-    end = time.time()
-    print(f"Added huge post (1920x1080) in {end-start:.4f} seconds")
-
-    print("Board summary:", board)
-    print("Sample tile posts at (10,10):", board.post_bitmap.get((10,10)))
