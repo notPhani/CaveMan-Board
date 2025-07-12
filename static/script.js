@@ -19,7 +19,6 @@ document.getElementById("loginForm").addEventListener("submit", async function (
     const data = await res.json();
 
     if (data.success) {
-      // ✅ Success - store UUID in localStorage
       localStorage.setItem("cavemanLoggedIn", "true");
       localStorage.setItem("cavemanUUID", data.uuid);
 

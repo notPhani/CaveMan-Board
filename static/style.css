@@ -1,56 +1,91 @@
-html, body {
+body {
+  background: linear-gradient(120deg, #181f2b 0%, #1e2a38 100%);
+  min-height: 100vh;
   margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  font-family: sans-serif;
-  background: #1e1e1e;
-  overflow: hidden;
-}
-
-#login-form {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(30, 30, 30, 0.85);
-  z-index: 10;
+  font-family: 'Segoe UI', sans-serif;
   display: flex;
-  justify-content: center;
   align-items: center;
+  justify-content: center;
 }
 
-#login-form form {
-  background: #333;
-  padding: 30px;
-  border-radius: 10px;
-  box-shadow: 0 0 20px rgba(0,0,0,0.5);
+.auth-glass {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  width: 350px;
+  padding: 2.5rem;
+  background: rgba(255,255,255,0.15);
+  border-radius: 2rem;
+  box-shadow: 0 8px 32px 0 rgba(31,38,135,0.37);
+  backdrop-filter: blur(16px);
+  border: 1.5px solid rgba(255,255,255,0.2);
+  z-index: 1000;
+  text-align: center;
+  transition: all 0.8s cubic-bezier(.87,-0.41,.19,1.44);
 }
 
-#login-form input {
-  display: block;
-  width: 250px;
-  margin: 10px 0;
-  padding: 10px;
-  font-size: 16px;
-  border: none;
-  border-radius: 5px;
+.auth-glass h2 {
+  color: #fff;
+  letter-spacing: 0.03em;
+  margin-bottom: 1.5rem;
 }
 
-#login-form button {
+#auth-form input {
   width: 100%;
-  padding: 10px;
-  background: #ff9800;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  border-radius: 0.8rem;
+  border: none;
+  background: rgba(255,255,255,0.22);
+  color: #fff;
+  font-size: 1.05rem;
+  outline: none;
+}
+
+.neon-btn {
+  width: 100%;
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: rgba(0, 120, 255, 0.6);
   color: #fff;
   border: none;
-  border-radius: 5px;
-  font-weight: bold;
-  font-size: 16px;
+  border-radius: 1rem;
+  font-size: 1.1rem;
+  box-shadow: 0 0 8px #08f6ff, 0 0 16px #08f6ff;
+  transition: background 0.3s, box-shadow 0.3s;
   cursor: pointer;
-  transition: background 0.3s;
+  font-weight: 600;
 }
 
-#login-form button:hover {
-  background: #ffa733;
+.neon-btn:hover {
+  background: rgba(255, 140, 0, 0.7);
+  box-shadow: 0 0 12px #ff9100, 0 0 24px #ff9100;
+}
+
+.toggle-btn {
+  margin-top: 1rem;
+  background: none;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: 0.95rem;
+  opacity: 0.7;
+}
+
+.oauth-buttons {
+  margin: 1rem 0 0.5rem 0;
+  display: flex;
+  gap: 4%;
+  justify-content: center;
+}
+
+.oauth {
+  width: 48%;
+}
+
+#board {
+  color: #fff;
+  text-align: center;
+  font-size: 2rem;
 }

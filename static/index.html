@@ -1,23 +1,224 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="utf-8" />
-    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <title>CaveMan Board</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="stylesheet" href="./style.css" />
-</head>
-<body>
-    <div id="login-form">
-        <form id="loginForm">
-            <input name="Username" id="User-name" placeholder="Username" />
-            <input name="Password" id="User-password" type="password" placeholder="Password" />
-            <button type="submit" id="submit">Enter</button>
-        </form>
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>Big Ass Div Test</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden; /* Hide scrollbars */
+        height: 100%;
+        width: 100%;
+        user-select: none;
+        -webkit-user-select: none;
+        -ms-user-select: none;
+      }
+
+      #viewport {
+        width: 100%;
+        height: 100%;
+        position: relative;
+        overflow: hidden;
+        background-color: #111;
+        cursor: grab;
+      }
+
+      #board {
+        position: absolute;
+        width: 10000px;
+        height: 10000px;
+        background-image: linear-gradient(#333 1px, transparent 1px),
+          linear-gradient(90deg, #333 1px, transparent 1px);
+        background-size: 100px 100px;
+        top: 0;
+        left: 0;
+      }
+      /* Blurred overlay */
+      #overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        backdrop-filter: blur(8px);
+        background: rgba(0, 0, 0, 0.4);
+        display: none;
+        z-index: 10;
+        transition: opacity 0.2s ease;
+      }
+
+      /* Command palette styling */
+      #command-palette {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 500px;
+        padding: 24px;
+        background: rgba(30, 30, 30, 0.65);
+        backdrop-filter: blur(16px);
+        border-radius: 16px;
+        box-shadow: 0 4px 40px rgba(0, 0, 0, 0.7);
+        display: none;
+        z-index: 20;
+        transition: all 0.3s ease;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      /* Input aesthetics */
+      #command-palette input {
+        width: 100%;
+        padding: 14px 16px;
+        font-size: 18px;
+        font-family: "Fira Code", monospace;
+        border: none;
+        background: rgba(0, 0, 0, 0.3);
+        color: #f8f8f8;
+        border-radius: 10px;
+        outline: none;
+        box-shadow: 0 0 0px rgba(255, 255, 255, 0);
+        transition: all 0.2s ease-in-out;
+      }
+
+      #command-palette input::placeholder {
+        color: #aaa;
+        font-style: italic;
+      }
+
+      #command-palette input:focus {
+        box-shadow: 0 0 8px rgba(100, 200, 255, 0.5);
+        background: rgba(0, 0, 0, 0.4);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="viewport">
+      <div id="overlay"></div>
+
+      <div id="command-palette">
+        <input
+          type="text"
+          id="command-input"
+          placeholder="Type a command..."
+          autofocus
+        />
+      </div>
+
+      <div id="board"></div>
     </div>
 
-    <div id="board"></div>
+    <script>
+      window.addEventListener(
+        "wheel",
+        function (e) {
+          if (e.ctrlKey) {
+            e.preventDefault();
+          }
+        },
+        { passive: false }
+      );
 
-    <script src="script.js" async defer></script>
-</body>
+      let isDragging = false;
+      let lastX = 0;
+      let lastY = 0;
+
+      const board = document.getElementById("board");
+      const viewport = document.getElementById("viewport");
+
+      let offsetX = 0;
+      let offsetY = 0;
+
+      document.getElementById("viewport").addEventListener("mousedown", (e) => {
+        isDragging = true;
+        lastX = e.clientX;
+        lastY = e.clientY;
+        document.body.style.cursor = "grabbing";
+      });
+
+      document.addEventListener("mouseup", () => {
+        isDragging = false;
+        document.body.style.cursor = "grab";
+      });
+
+      document.addEventListener("mousemove", (e) => {
+        if (!isDragging) return;
+        const dx = e.clientX - lastX;
+        const dy = e.clientY - lastY;
+        lastX = e.clientX;
+        lastY = e.clientY;
+
+        offsetX += dx;
+        offsetY += dy;
+
+        // Clamp so we can't scroll outside board
+        const maxX = 0;
+        const maxY = 0;
+        const minX = viewport.clientWidth - board.clientWidth;
+        const minY = viewport.clientHeight - board.clientHeight;
+
+        offsetX = Math.min(maxX, Math.max(minX, offsetX));
+        offsetY = Math.min(maxY, Math.max(minY, offsetY));
+
+        board.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+      });
+      const overlay = document.getElementById("overlay");
+      const palette = document.getElementById("command-palette");
+      const input = document.getElementById("command-input");
+
+      let isPaletteOpen = false;
+
+      function openPalette() {
+        overlay.style.display = "block";
+        palette.style.display = "block";
+        input.focus();
+        isPaletteOpen = true;
+      }
+
+      function closePalette() {
+        overlay.style.display = "none";
+        palette.style.display = "none";
+        input.value = "";
+        isPaletteOpen = false;
+      }
+
+      // Listen for Ctrl+/ or Cmd+/
+      document.addEventListener("keydown", (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "/") {
+          e.preventDefault();
+          if (!isPaletteOpen) {
+            openPalette();
+          } else {
+            closePalette();
+          }
+        } else if (e.key === "Escape" && isPaletteOpen) {
+          closePalette();
+        } else if (e.key === "Enter" && isPaletteOpen) {
+          executeCommand(input.value);
+          closePalette();
+        }
+      });
+
+      // Very simple command handler
+      function executeCommand(cmd) {
+        console.log("Running command:", cmd);
+
+        // You could parse the command here:
+        if (cmd.startsWith("/post")) {
+          const [, type] = cmd.split(" ");
+          alert(`Posting ${type}!`);
+        } else if (cmd.startsWith("/tp")) {
+          const [, x, y] = cmd.split(" ");
+          alert(`Teleporting to ${x}, ${y}`);
+        } else {
+          alert("Unknown command: " + cmd);
+        }
+      }
+    </script>
+  </body>
 </html>

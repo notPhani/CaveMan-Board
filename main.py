@@ -4,10 +4,29 @@ import time
 
 # --- CONFIG ---
 MAX_USERS = 10000
-BOARD_W, BOARD_H = 1920, 1080
+BOARD_W, BOARD_H = 1000, 1000
 CHUNK_SIZE = 100
 
 # --- DATA STRUCTURES ---
+@njit
+def compute_tiles(x, y, w, h, boardW, boardH):
+    tiles = []
+    for dx in range(w):
+        for dy in range(h):
+            tx = x + dx
+            ty = y + dy
+            if 0 <= tx < boardW and 0 <= ty < boardH:
+                tiles.append((tx, ty))
+    return tiles
+
+@njit
+def overlaps(px, py, pw, ph, vx0, vy0, vw, vh):
+    vx1 = vx0 + vw
+    vy1 = vy0 + vh
+    px1 = px + pw
+    py1 = py + ph
+    return not (px1 <= vx0 or px >= vx1 or py1 <= vy0 or py >= vy1)
+
 
 class User:
     def __init__(self, UUID, username, status, lastLogin, clientW, clientH, isMoving=False, anchor=None):
@@ -135,32 +154,49 @@ class Board:
                 self.chunk_map[key].add(post.postID)
         # Mark tiles as occupied (for small posts)
         if w * h < 1000:
-            for dx in range(w):
-                for dy in range(h):
-                    tile = (x + dx, y + dy)
-                    if 0 <= tile[0] < self.boardDim[0] and 0 <= tile[1] < self.boardDim[1]:
-                        self.occupied.add(tile)
+            tiles = compute_tiles(x, y, w, h, self.boardDim[0], self.boardDim[1])
+            for tile in tiles:
+                self.occupied.add(tile)
+
         self._updateChunk(post.postedBy.chunkID)
 
     def posts_in_viewport(self, x0, y0, w, h):
-        # Efficient chunked query for posts in viewport
         cx0, cy0 = x0 // CHUNK_SIZE, y0 // CHUNK_SIZE
         cx1, cy1 = (x0 + w - 1) // CHUNK_SIZE, (y0 + h - 1) // CHUNK_SIZE
+
         post_ids = set()
         for cx in range(cx0, cx1 + 1):
             for cy in range(cy0, cy1 + 1):
                 key = (cx, cy)
                 if key in self.chunk_map:
                     post_ids.update(self.chunk_map[key])
-        # Filter posts that actually intersect the viewport
-        result = []
-        for pid in post_ids:
-            p = self.posts[pid]
-            px, py = p.postedOn
-            pw, ph = p.postSize
-            if not (px + pw <= x0 or px >= x0 + w or py + ph <= y0 or py >= y0 + h):
-                result.append(p)
+
+        if not post_ids:
+            return []
+
+        ids = np.array(list(post_ids))
+        coords = np.array(
+            [self.posts[pid].postedOn for pid in ids],
+            dtype=np.int32
+        )
+        sizes = np.array(
+            [self.posts[pid].postSize for pid in ids],
+            dtype=np.int32
+        )
+
+        mask = []
+        for i in range(len(ids)):
+            px, py = coords[i]
+            pw, ph = sizes[i]
+            if overlaps(px, py, pw, ph, x0, y0, w, h):
+                mask.append(True)
+            else:
+                mask.append(False)
+
+        filtered_ids = ids[np.array(mask)]
+        result = [self.posts[pid] for pid in filtered_ids]
         return result
+
     
     def _updateChunk(self, chunkId):
         users_in_chunk = self.chunkUsermap.get(chunkId, set())
@@ -211,5 +247,38 @@ class Board:
     def __repr__(self):
         return f"<Board Users={len(self.users)}, Posts={len(self.posts)}, Chunks={len(self.chunk_map)}>"
 
+# --- Login Logic ---
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from pydantic import BaseModel # Import BaseModel
+import uuid
 
+app = FastAPI()
+
+class LoginCredentials(BaseModel):
+    """Pydantic model for login request data."""
+    username: str
+    password: str
+
+# In-memory "database" of valid users for testing
+VALID_USERS = {
+    "user1": "12345",
+    "user2": "12345",
+    "user3": "12345",
+    "MoFO": "PwantsPP69" # The legend himself
+}
+
+@app.post("/login")
+async def login(credentials: LoginCredentials):
+    """
+    Handles user authentication.
+    Accepts a POST request with username and password.
+    """
+    # Check if the username exists and the password matches
+    if credentials.username in VALID_USERS and VALID_USERS[credentials.username] == credentials.password:
+        user_uuid = f"user-{uuid.uuid4()}"
+        print(f"User '{credentials.username}' authenticated. UUID: {user_uuid}")
+        return {"authenticated": True, "uuid": user_uuid}
+    else:
+        # If auth fails, raise a 401 Unauthorized error
+        raise HTTPException(status_code=401, detail="Incorrect Username or Password")
 
